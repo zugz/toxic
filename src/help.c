@@ -302,6 +302,7 @@ static void help_draw_group(ToxWindow *self)
     wattroff(win, A_BOLD | COLOR_PAIR(RED));
 
     wprintw(win, "  /title <msg>               : Set group title (show current title if no msg)\n\n");
+    wprintw(win, "  /audio <on> or <off>       : Enable/disable audio in an audio group\n\n");
 
     help_draw_bottom_menu(win);
 

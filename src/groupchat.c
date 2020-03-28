@@ -152,6 +152,7 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
             groupchats[i].num_peers = 0;
             groupchats[i].type = type;
             groupchats[i].start_time = get_unix_time();
+            groupchats[i].capturing_audio = false;
 
             set_active_window_index(groupchats[i].chatwin);
             set_window_title(self, title, title_length);
@@ -160,7 +161,7 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
                 ++max_groupchat_index;
             }
 
-            return 0;
+            return groupchats[i].chatwin;
         }
     }
 
@@ -171,6 +172,9 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
 
 static void free_peer(GroupPeer *peer)
 {
+    if (peer->sending_audio) {
+        close_device(output, peer->audio_out_idx);
+    }
 }
 
 void free_groupchat(ToxWindow *self, uint32_t groupnum)
@@ -185,9 +189,17 @@ void free_groupchat(ToxWindow *self, uint32_t groupnum)
         }
     }
 
+    if (chat->capturing_audio) {
+        close_device(input, chat->audio_in_idx);
+    }
+
     free(chat->name_list);
     free(chat->peer_list);
     memset(chat, 0, sizeof(GroupChat));
+
+    if (groupchats[groupnum].capturing_audio) {
+        close_device(input, groupchats[groupnum].audio_in_idx);
+    }
 
     int i;
 
@@ -818,4 +830,97 @@ static ToxWindow *new_group_chat(uint32_t groupnum)
     ret->active_box = -1;
 
     return ret;
+}
+
+void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber, const int16_t *pcm, unsigned int samples, uint8_t channels, uint32_t sample_rate, void *userdata)
+{
+    GroupChat *chat = &groupchats[groupnumber];
+
+    if (!chat->active) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < chat->max_idx; ++i) {
+        GroupPeer *peer = &chat->peer_list[i];
+
+        if (!peer->active || peer->peernumber != peernumber) {
+            continue;
+        }
+
+        if (!peer->sending_audio) {
+            if (open_output_device(&peer->audio_out_idx,
+                                    sample_rate, 20, channels) != de_None) {
+                // TODO: error message?
+                return;
+            }
+
+            peer->sending_audio = true;
+        }
+
+        write_out(peer->audio_out_idx, pcm, samples, channels, sample_rate);
+
+        peer->last_audio_time = get_unix_time();
+
+        return;
+    }
+}
+
+#define GROUPAV_SAMPLE_RATE 48000
+#define GROUPAV_FRAME_DURATION 20
+#define GROUPAV_AUDIO_CHANNELS 1
+#define GROUPAV_SAMPLES_PER_FRAME (GROUPAV_SAMPLE_RATE * GROUPAV_FRAME_DURATION / 1000)
+
+static void group_read_device_callback(const int16_t *captured, uint32_t size, void *data)
+{
+    UNUSED_VAR(size);
+
+    AudioInputCallbackData *audio_input_callback_data = (AudioInputCallbackData *)data;
+
+    toxav_group_send_audio(audio_input_callback_data->tox,
+            audio_input_callback_data->groupnumber,
+            captured, GROUPAV_SAMPLES_PER_FRAME,
+            GROUPAV_AUDIO_CHANNELS, GROUPAV_SAMPLE_RATE);
+}
+
+bool init_group_audio_input(Tox *tox, uint32_t groupnumber)
+{
+    GroupChat *chat = &groupchats[groupnumber];
+
+    if (!chat->active) {
+        return false;
+    }
+    
+    const AudioInputCallbackData audio_input_callback_data = { tox, groupnumber };
+    chat->audio_input_callback_data = audio_input_callback_data;
+
+    bool success = (open_input_device(&chat->audio_in_idx,
+                group_read_device_callback, &chat->audio_input_callback_data, true, 
+                GROUPAV_SAMPLE_RATE, GROUPAV_FRAME_DURATION, GROUPAV_AUDIO_CHANNELS)
+            == de_None);
+
+    chat->capturing_audio = success;
+
+    return success;
+}
+
+bool enable_group_audio(Tox *tox, uint32_t groupnumber)
+{
+    return (toxav_groupchat_enable_av(tox, groupnumber, audio_group_callback, NULL) == 0
+                && init_group_audio_input(tox, groupnumber));
+}
+
+bool disable_group_audio(Tox *tox, uint32_t groupnumber)
+{
+    GroupChat *chat = &groupchats[groupnumber];
+
+    if (!chat->active) {
+        return false;
+    }
+
+    if (chat->capturing_audio) {
+        close_device(input, chat->audio_in_idx);
+        chat->capturing_audio = false;
+    }
+
+    return (toxav_groupchat_disable_av(tox, groupnumber) == 0);
 }

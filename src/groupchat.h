@@ -39,7 +39,16 @@ typedef struct GroupPeer {
 
     char       name[TOX_MAX_NAME_LENGTH];
     size_t     name_length;
+
+    bool       sending_audio;
+    uint32_t   audio_out_idx;
+    time_t     last_audio_time;
 } GroupPeer;
+
+typedef struct AudioInputCallbackData {
+    Tox *tox;
+    uint32_t groupnumber;
+} AudioInputCallbackData;
 
 typedef struct {
     int chatwin;
@@ -54,6 +63,11 @@ typedef struct {
     char *name_list;
     uint32_t num_peers;
 
+    bool audio_enabled;
+
+    bool capturing_audio;
+    uint32_t audio_in_idx;
+    AudioInputCallbackData audio_input_callback_data;
 } GroupChat;
 
 /* Frees all Toxic associated data structures for a groupchat (does not call tox_conference_delete() ) */
@@ -63,5 +77,12 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
 
 /* destroys and re-creates groupchat window with or without the peerlist */
 void redraw_groupchat_win(ToxWindow *self);
+
+bool init_group_audio_input(Tox *tox, uint32_t groupnumber);
+bool enable_group_audio(Tox *tox, uint32_t groupnumber);
+bool disable_group_audio(Tox *tox, uint32_t groupnumber);
+void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber,
+        const int16_t *pcm, unsigned int samples, uint8_t channels, uint32_t
+        sample_rate, void *userdata);
 
 #endif /* GROUPCHAT_H */

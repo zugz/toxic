@@ -27,6 +27,7 @@
 #include "line_info.h"
 #include "misc_tools.h"
 #include "log.h"
+#include "groupchat.h"
 
 void cmd_set_title(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*argv)[MAX_STR_SIZE])
 {
@@ -78,4 +79,38 @@ void cmd_set_title(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*arg
     char tmp_event[MAX_STR_SIZE];
     snprintf(tmp_event, sizeof(tmp_event), "set title to %s", title);
     write_to_log(tmp_event, selfnick, self->chatwin->log, true);
+}
+
+void cmd_enable_audio(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*argv)[MAX_STR_SIZE])
+{
+    UNUSED_VAR(window);
+
+    bool enable;
+    if (argc == 1 && !strcasecmp(argv[1], "on")) {
+        enable = true;
+    } else if (argc == 1 && !strcasecmp(argv[1], "off")) {
+        enable = false;
+    } else {
+        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Please specify: on | off");
+        return;
+    }
+
+    if ((enable ? enable_group_audio : disable_group_audio)(m, self->num)) {
+        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, enable ? "Enabled group audio" : "Disabled group audio");
+    } else {
+        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, enable ? "Failed to enable audio" : "Failed to disable audio");
+    }
+}
+
+void cmd_disable_audio(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*argv)[MAX_STR_SIZE])
+{
+    UNUSED_VAR(window);
+    UNUSED_VAR(argc);
+    UNUSED_VAR(argv);
+
+    if (disable_group_audio(m, self->num)) {
+        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Disabled group audio");
+    } else {
+        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Failed to disable audio");
+    }
 }
