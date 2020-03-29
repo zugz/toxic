@@ -808,6 +808,8 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
 
             pthread_mutex_lock(&Winthread.lock);
             const uint32_t peer = i + groupchats[self->num].side_pos;
+            const uint32_t peernum = groupchats[self->num].name_list[peer].peernum;
+            const bool is_self = tox_conference_peer_number_is_ours(m, self->num, peernum, NULL);
             pthread_mutex_unlock(&Winthread.lock);
 
             /* truncate nick to fit in side panel without modifying list */
@@ -816,8 +818,6 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
 
             if (av) {
                 pthread_mutex_lock(&Winthread.lock);
-                const uint32_t peernum = groupchats[self->num].name_list[peer].peernum;
-                const bool is_self = tox_conference_peer_number_is_ours(m, self->num, peernum, NULL);
                 const GroupPeer *peer = &groupchats[self->num].peer_list[peernum];
                 const bool audio_active = is_self
                     ? sending_audio
@@ -837,7 +837,15 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
 
             tmpnck[maxlen] = '\0';
 
+            if (is_self) {
+                wattron(ctx->sidebar, COLOR_PAIR(GREEN));
+            }
+
             wprintw(ctx->sidebar, "%s\n", tmpnck);
+
+            if (is_self) {
+                wattroff(ctx->sidebar, COLOR_PAIR(GREEN));
+            }
         }
     }
 
