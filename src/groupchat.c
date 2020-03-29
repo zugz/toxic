@@ -590,6 +590,13 @@ static void send_group_action(ToxWindow *self, ChatContext *ctx, Tox *m, char *a
     }
 }
 
+/* Offset for the peer number box at the top of the statusbar */
+static int sidebar_offset(uint32_t groupnum)
+{
+    return 2 + (groupchats[groupnum].type == TOX_CONFERENCE_TYPE_AV);
+}
+
+
 static void groupchat_onKey(ToxWindow *self, Tox *m, wint_t key, bool ltr)
 {
     ChatContext *ctx = self->chatwin;
@@ -661,7 +668,7 @@ static void groupchat_onKey(ToxWindow *self, Tox *m, wint_t key, bool ltr)
             sound_notify(self, notif_error, 0, NULL);
         }
     } else if (key == user_settings->key_peer_list_down) {    /* Scroll peerlist up and down one position */
-        const int L = y2 - CHATBOX_HEIGHT - SDBAR_OFST;
+        const int L = y2 - CHATBOX_HEIGHT - sidebar_offset(self->num);
 
         if (groupchats[self->num].side_pos < (int64_t) groupchats[self->num].num_peers - L) {
             ++groupchats[self->num].side_pos;
@@ -741,22 +748,41 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
         mvwaddch(ctx->sidebar, y2 - CHATBOX_HEIGHT, 0, ACS_BTEE);
 
         pthread_mutex_lock(&Winthread.lock);
-        uint32_t num_peers = groupchats[self->num].num_peers;
+        const uint32_t num_peers = groupchats[self->num].num_peers;
+        const bool av = groupchats[self->num].type == TOX_CONFERENCE_TYPE_AV;
+        const bool sending_audio = groupchats[self->num].capturing_audio && !groupchats[self->num].mute;
+        const int header_lines = sidebar_offset(self->num);
         pthread_mutex_unlock(&Winthread.lock);
 
-        wmove(ctx->sidebar, 0, 1);
+        int line = 0;
+
+        if (av) {
+            wmove(ctx->sidebar, line, 1);
+            wattron(ctx->sidebar, A_BOLD);
+            wprintw(ctx->sidebar, "Mic: ");
+            const int color = sending_audio ? GREEN : RED;
+            wattron(ctx->sidebar, COLOR_PAIR(color));
+            wprintw(ctx->sidebar, sending_audio ? "ON" : "OFF");
+            wattroff(ctx->sidebar, COLOR_PAIR(color));
+            wattroff(ctx->sidebar, A_BOLD);
+            ++line;
+        }
+
+        wmove(ctx->sidebar, line, 1);
         wattron(ctx->sidebar, A_BOLD);
         wprintw(ctx->sidebar, "Peers: %"PRIu32"\n", num_peers);
         wattroff(ctx->sidebar, A_BOLD);
+        ++line;
 
-        mvwaddch(ctx->sidebar, 1, 0, ACS_LTEE);
-        mvwhline(ctx->sidebar, 1, 1, ACS_HLINE, SIDEBAR_WIDTH - 1);
+        mvwaddch(ctx->sidebar, line, 0, ACS_LTEE);
+        mvwhline(ctx->sidebar, line, 1, ACS_HLINE, SIDEBAR_WIDTH - 1);
+        ++line;
 
-        int maxlines = y2 - SDBAR_OFST - CHATBOX_HEIGHT;
+        int maxlines = y2 - header_lines - CHATBOX_HEIGHT;
         uint32_t i;
 
         for (i = 0; i < num_peers && i < maxlines; ++i) {
-            wmove(ctx->sidebar, i + 2, 1);
+            wmove(ctx->sidebar, i + header_lines, 1);
 
             pthread_mutex_lock(&Winthread.lock);
             uint32_t peer = i + groupchats[self->num].side_pos;
@@ -765,6 +791,8 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
             /* truncate nick to fit in side panel without modifying list */
             char tmpnck[TOX_MAX_NAME_LENGTH];
             int maxlen = SIDEBAR_WIDTH - 2;
+
+            // TODO: indicate which peers are sending audio and are not muted
 
             pthread_mutex_lock(&Winthread.lock);
             memcpy(tmpnck, &groupchats[self->num].name_list[peer * TOX_MAX_NAME_LENGTH], maxlen);
@@ -936,6 +964,7 @@ bool init_group_audio_input(Tox *tox, uint32_t groupnumber)
             == de_None);
 
     chat->capturing_audio = success;
+    chat->mute = false;
 
     return success;
 }
@@ -971,6 +1000,7 @@ bool group_mute_self(uint32_t groupnumber)
     }
 
     device_mute(input, chat->audio_in_idx);
+    chat->mute = !chat->mute;
 
     return true;
 }

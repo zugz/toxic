@@ -27,7 +27,6 @@
 #include "windows.h"
 
 #define SIDEBAR_WIDTH 16
-#define SDBAR_OFST 2    /* Offset for the peer number box at the top of the statusbar */
 #define MAX_GROUPCHAT_NUM MAX_WINDOWS_NUM - 2
 #define GROUP_EVENT_WAIT 3
 
@@ -67,6 +66,7 @@ typedef struct {
 
     bool capturing_audio;
     uint32_t audio_in_idx;
+    bool mute;
     AudioInputCallbackData audio_input_callback_data;
 } GroupChat;
 
