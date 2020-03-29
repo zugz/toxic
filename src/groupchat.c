@@ -31,6 +31,7 @@
 #include <wchar.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <math.h>
 
 #ifdef AUDIO
 #ifdef __APPLE__
@@ -390,6 +391,38 @@ static int realloc_peer_list(GroupChat *chat, uint32_t num_peers)
     return 0;
 }
 
+static void set_peer_audio_position(Tox *m, uint32_t groupnum, uint32_t peernum)
+{
+    GroupChat *chat = &groupchats[groupnum];
+    GroupPeer *peer = &chat->peer_list[peernum];
+
+    if (!peer->sending_audio) {
+        return;
+    }
+
+    // Position peers at distance 1 in front of listener,
+    // ordered left to right by order in peerlist excluding self.
+    uint32_t num_posns = chat->num_peers;
+    uint32_t peer_posn = peernum;
+    for (uint32_t i = 0; i < chat->num_peers; ++i) {
+        if (tox_conference_peer_number_is_ours(m, groupnum, peernum, NULL)) {
+            if (i == peernum) {
+                return;
+            }
+
+            --num_posns;
+
+            if (i < peernum) {
+                --peer_posn;
+            }
+        }
+    }
+
+    const float angle = asinf(peer_posn - (float)(num_posns-1)/2);
+    set_source_position(peer->audio_out_idx, sinf(angle), cosf(angle), 0);
+}
+
+
 static bool find_peer_by_pubkey(GroupPeer *list, uint32_t num_peers, uint8_t *pubkey, uint32_t *idx)
 {
     for (uint32_t i = 0; i < num_peers; ++i) {
@@ -457,6 +490,8 @@ static void update_peer_list(Tox *m, uint32_t groupnum, uint32_t num_peers, uint
         peer->active = true;
         peer->name_length = length;
         peer->peernumber = i;
+
+        set_peer_audio_position(m, groupnum, i);
     }
 
     for (uint32_t i = 0; i < old_num_peers; ++i) {
@@ -855,6 +890,8 @@ void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber, 
             }
 
             peer->sending_audio = true;
+
+            set_peer_audio_position(tox, groupnumber, i);
         }
 
         write_out(peer->audio_out_idx, pcm, samples, channels, sample_rate);
