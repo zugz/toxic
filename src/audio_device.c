@@ -52,470 +52,549 @@
 
 extern struct user_settings *user_settings;
 
-typedef struct Device {
-    ALCdevice  *dhndl;                     /* Handle of device selected/opened */
-    ALCcontext *ctx;                       /* Device context */
-    DataHandleCallback cb;                 /* Use this to handle data from input device usually */
-    void *cb_data;                         /* Data to be passed to callback */
-    int32_t friend_number;                      /* ToxAV friend number */
-
-    uint32_t source, buffers[OPENAL_BUFS]; /* Playback source/buffers */
-    uint32_t ref_count;
-    int32_t selection;
-    bool enable_VAD;
-    bool muted;
-    pthread_mutex_t mutex[1];
+typedef struct FrameInfo {
+    uint32_t samples_per_frame;
     uint32_t sample_rate;
-    uint32_t frame_duration;
-    int32_t sound_mode;
+    bool stereo;
+} FrameInfo;
+
+typedef struct DeviceRef {
+    bool active;
+    bool muted;
+
+    FrameInfo frame_info;
+
+    // used only by capture device:
+    DataHandleCallback cb;
+    void *cb_data;
+    // TODO: implement VAD, and fix the typo, or remove these.
+    bool enable_VAD;
 #ifdef AUDIO
-    float VAD_treshold;                    /* 40 is usually recommended value */
+    float VAD_treshold; /* 40 is usually recommended value */
 #endif
-} Device;
 
-const char *ddevice_names[2];              /* Default device */
-const char *devices_names[2][MAX_DEVICES]; /* Container of available devices */
-static int size[2];                        /* Size of above containers */
-Device *running[2][MAX_DEVICES] = {{NULL}};     /* Running devices */
-uint32_t primary_device[2];          /* Primary device */
+    // used only by output device:
+    uint32_t source, buffers[OPENAL_BUFS];
+} DeviceRef;
 
-#ifdef AUDIO
-static ToxAV *av = NULL;
-#endif /* AUDIO */
+typedef struct AudioState {
+    ALCdevice *device[2];
 
-/* q_mutex */
-#define lock pthread_mutex_lock(&mutex)
-#define unlock pthread_mutex_unlock(&mutex)
-pthread_mutex_t mutex;
+    DeviceRef device_refs[2][MAX_DEVICE_REFS];
+    uint32_t num_device_refs[2];
+
+    FrameInfo capture_frame_info;
+
+    pthread_mutex_t mutex[2];
+
+    // TODO: unused
+    const char *ddevice_name[2];              /* Default devices */
+
+    const char *device_names[2][MAX_DEVICES]; /* Available devices */
+    uint32_t num_devices[2];
+    char *current_device_name[2];
+} AudioState;
+
+AudioState *audio_state;
+
+void lock(DeviceType type)
+{
+    pthread_mutex_lock(&audio_state->mutex[type]);
+}
+
+void unlock(DeviceType type)
+{
+    pthread_mutex_unlock(&audio_state->mutex[type]);
+}
 
 
 bool thread_running = true,
      thread_paused = true;               /* Thread control */
 
-void *thread_poll(void *);
-/* Meet devices */
-#ifdef AUDIO
-DeviceError init_devices(ToxAV *av_)
-#else
-DeviceError init_devices(void)
-#endif /* AUDIO */
+static void *poll_input(void *);
+
+static uint32_t sound_mode(bool stereo)
 {
-    get_devices_names();
+    return (stereo ? AL_FORMAT_STEREO16 : AL_FORMAT_MONO16);
+}
+
+static uint32_t sample_size(bool stereo)
+{
+    return (stereo ? 4 : 2);
+}
+
+DeviceError init_devices(void)
+{
+    audio_state = calloc(1, sizeof(AudioState));
+
+    if (audio_state == NULL) {
+        return de_InternalError;
+    }
+
+    get_device_names();
+
+    for (DeviceType type = input; type <= output; type++) {
+        audio_state->device[type] = NULL;
+
+        if (pthread_mutex_init(&audio_state->mutex[type], NULL) != 0) {
+            return de_InternalError;
+        }
+    }
 
     // Start poll thread
-    if (pthread_mutex_init(&mutex, NULL) != 0) {
-        return de_InternalError;
-    }
-
     pthread_t thread_id;
 
-    if (pthread_create(&thread_id, NULL, thread_poll, NULL) != 0 || pthread_detach(thread_id) != 0) {
+    if (pthread_create(&thread_id, NULL, poll_input, NULL) != 0 || pthread_detach(thread_id) != 0) {
         return de_InternalError;
     }
 
-#ifdef AUDIO
-    av = av_;
-#endif /* AUDIO */
-
-    return (DeviceError) de_None;
+    return de_None;
 }
 
 DeviceError terminate_devices(void)
 {
-    /* Cleanup if needed */
-    lock;
+    lock(input);
     thread_running = false;
-    unlock;
+    unlock(input);
 
     usleep(20000);
 
-    if (pthread_mutex_destroy(&mutex) != 0) {
-        return (DeviceError) de_InternalError;
-    }
+    for (DeviceType type = input; type <= output; type++) {
+        if (pthread_mutex_destroy(&audio_state->mutex[type]) != 0) {
+            return de_InternalError;
+        }
 
-    return (DeviceError) de_None;
-}
-
-void get_devices_names(void)
-{
-
-    const char *stringed_device_list;
-
-    size[input] = 0;
-
-    if ((stringed_device_list = alcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER))) {
-        ddevice_names[input] = alcGetString(NULL, ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER);
-
-        for (; *stringed_device_list && size[input] < MAX_DEVICES; ++size[input]) {
-            devices_names[input][size[input]] = stringed_device_list;
-            stringed_device_list += strlen(stringed_device_list) + 1;
+        if (audio_state->current_device_name[type]) {
+            free(audio_state->current_device_name[type]);
         }
     }
 
-    size[output] = 0;
+    free(audio_state);
 
-    if (alcIsExtensionPresent(NULL, "ALC_ENUMERATE_ALL_EXT") != AL_FALSE) {
-        stringed_device_list = alcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
-    } else {
-        stringed_device_list = alcGetString(NULL, ALC_DEVICE_SPECIFIER);
-    }
+    return de_None;
+}
 
-    if (stringed_device_list) {
-        ddevice_names[output] = alcGetString(NULL, ALC_DEFAULT_DEVICE_SPECIFIER);
+void get_device_names()
+{
+    const char *stringed_device_list;
 
-        for (; *stringed_device_list && size[output] < MAX_DEVICES; ++size[output]) {
-            devices_names[output][size[output]] = stringed_device_list;
-            stringed_device_list += strlen(stringed_device_list) + 1;
+    for (DeviceType type = input; type <= output; type++) {
+        audio_state->num_devices[type] = 0;
+        if (type == input) {
+            stringed_device_list = alcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
+        } else {
+            if (alcIsExtensionPresent(NULL, "ALC_ENUMERATE_ALL_EXT") != AL_FALSE) {
+                stringed_device_list = alcGetString(NULL, ALC_ALL_DEVICES_SPECIFIER);
+            } else {
+                stringed_device_list = alcGetString(NULL, ALC_DEVICE_SPECIFIER);
+            }
+        }
+
+        if (stringed_device_list) {
+            audio_state->ddevice_name[type] = alcGetString(NULL,
+                    type == input ? ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER : ALC_DEFAULT_DEVICE_SPECIFIER);
+
+            for (; *stringed_device_list && audio_state->num_devices[type] < MAX_DEVICES; ++audio_state->num_devices[type]) {
+                audio_state->device_names[type][audio_state->num_devices[type]] = stringed_device_list;
+                stringed_device_list += strlen(stringed_device_list) + 1;
+            }
         }
     }
 }
 
 DeviceError device_mute(DeviceType type, uint32_t device_idx)
 {
-    if (device_idx >= MAX_DEVICES) {
+    if (device_idx >= MAX_DEVICE_REFS) {
         return de_InvalidSelection;
     }
 
-    lock;
+    DeviceRef *ref = &audio_state->device_refs[type][device_idx];
 
-    Device *device = running[type][device_idx];
-
-    if (!device) {
-        unlock;
+    if (!ref->active) {
         return de_DeviceNotActive;
     }
 
-    device->muted = !device->muted;
+    lock(type);
 
-    unlock;
+    ref->muted = !ref->muted;
+
+    unlock(type);
     return de_None;
 }
 
 #ifdef AUDIO
 DeviceError device_set_VAD_treshold(uint32_t device_idx, float value)
 {
-    if (device_idx >= MAX_DEVICES) {
+    if (device_idx >= MAX_DEVICE_REFS) {
         return de_InvalidSelection;
     }
 
-    lock;
+    DeviceRef *ref = &audio_state->device_refs[input][device_idx];
 
-    Device *device = running[input][device_idx];
-
-    if (!device) {
-        unlock;
+    if (!ref->active) {
         return de_DeviceNotActive;
     }
 
-    device->VAD_treshold = value;
+    lock(input);
 
-    unlock;
+    ref->VAD_treshold = value;
+
+    unlock(input);
     return de_None;
 }
 #endif
 
-
-DeviceError set_primary_device(DeviceType type, int32_t selection)
+static DeviceError open_al_device(DeviceType type, FrameInfo frame_info)
 {
-    if (size[type] <= selection || selection < 0) {
-        return de_InvalidSelection;
-    }
+    audio_state->device[type] = type == input
+        ? alcCaptureOpenDevice(audio_state->current_device_name[type],
+                frame_info.sample_rate, sound_mode(frame_info.stereo), frame_info.samples_per_frame * 2)
+        : alcOpenDevice(audio_state->current_device_name[type]);
 
-    primary_device[type] = selection;
-
-    return de_None;
-}
-
-DeviceError open_primary_device(DeviceType type, uint32_t *device_idx, uint32_t sample_rate, uint32_t frame_duration,
-                                uint8_t channels)
-{
-    return open_device(type, primary_device[type], device_idx, sample_rate, frame_duration, channels);
-}
-
-void get_primary_device_name(DeviceType type, char *buf, int size)
-{
-    memcpy(buf, ddevice_names[type], size);
-}
-
-// TODO: generate buffers separately
-DeviceError open_device(DeviceType type, int32_t selection, uint32_t *device_idx, uint32_t sample_rate,
-                        uint32_t frame_duration, uint8_t channels)
-{
-    if (size[type] <= selection || selection < 0) {
-        return de_InvalidSelection;
-    }
-
-    if (channels != 1 && channels != 2) {
-        return de_UnsupportedMode;
-    }
-
-    lock;
-
-    const uint32_t frame_size = (sample_rate * frame_duration / 1000);
-
-    uint32_t i;
-
-    for (i = 0; i < MAX_DEVICES && running[type][i] != NULL; ++i);
-
-    if (i == MAX_DEVICES) {
-        unlock;
-        return de_AllDevicesBusy;
-    } else {
-        *device_idx = i;
-    }
-
-    for (i = 0; i < MAX_DEVICES; i ++) { /* Check if any device has the same selection */
-        if (running[type][i] && running[type][i]->selection == selection) {
-//             printf("a%d-%d:%p ", selection, i, running[type][i]->dhndl);
-
-            running[type][*device_idx] = running[type][i];
-            running[type][i]->ref_count ++;
-
-            unlock;
-            return de_None;
-        }
-    }
-
-    Device *device = running[type][*device_idx] = calloc(1, sizeof(Device));
-    device->selection = selection;
-
-    device->sample_rate = sample_rate;
-    device->frame_duration = frame_duration;
-    device->sound_mode = channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16;
-
-    if (pthread_mutex_init(device->mutex, NULL) != 0) {
-        free(device);
-        unlock;
-        return de_InternalError;
-    }
-
-    if (type == input) {
-        device->dhndl = alcCaptureOpenDevice(devices_names[type][selection],
-                                             sample_rate, device->sound_mode, frame_size * 2);
-#ifdef AUDIO
-        device->VAD_treshold = user_settings->VAD_treshold;
-#endif
-    } else {
-        device->dhndl = alcOpenDevice(devices_names[type][selection]);
-
-        if (!device->dhndl) {
-            free(device);
-            running[type][*device_idx] = NULL;
-            unlock;
-            return de_FailedStart;
-        }
-
-        device->ctx = alcCreateContext(device->dhndl, NULL);
-        alcMakeContextCurrent(device->ctx);
-
-        alGenBuffers(OPENAL_BUFS, device->buffers);
-        alGenSources((uint32_t)1, &device->source);
-        alSourcei(device->source, AL_LOOPING, AL_FALSE);
-
-        uint16_t zeros[frame_size];
-        memset(zeros, 0, frame_size * 2);
-
-        for (i = 0; i < OPENAL_BUFS; ++i) {
-            alBufferData(device->buffers[i], device->sound_mode, zeros, frame_size * 2, sample_rate);
-        }
-
-        alSourceQueueBuffers(device->source, OPENAL_BUFS, device->buffers);
-        alSourcePlay(device->source);
-    }
-
-    if (alcGetError(device->dhndl) != AL_NO_ERROR) {
-        free(device);
-        running[type][*device_idx] = NULL;
-        unlock;
+    if (!audio_state->device[type] || alcGetError(audio_state->device[type]) != AL_NO_ERROR) {
         return de_FailedStart;
     }
 
     if (type == input) {
-        alcCaptureStart(device->dhndl);
+        alcCaptureStart(audio_state->device[type]);
         thread_paused = false;
+
+        audio_state->capture_frame_info = frame_info;
+    } else {
+        alcMakeContextCurrent(alcCreateContext(audio_state->device[type], NULL));
     }
 
-    unlock;
     return de_None;
+}
+
+static DeviceError close_al_device(DeviceType type)
+{
+    audio_state->device[type] = NULL;
+
+    if (type == input) {
+        if (!alcCaptureCloseDevice(audio_state->device[type])) {
+            return de_AlError;
+        }
+
+        thread_paused = true;
+    } else {
+        ALCcontext *context = alcGetCurrentContext();
+        alcMakeContextCurrent(NULL);
+        alcDestroyContext(context);
+
+        if (!alcCloseDevice(audio_state->device[type])) {
+            return de_AlError;
+        }
+    }
+
+    return de_None;
+}
+
+static void kill_ref(DeviceType type, DeviceRef *ref) {
+    if (ref->active) {
+        ref->active = false;
+        --audio_state->num_device_refs[type];
+    }
+}
+
+static DeviceError open_source(DeviceRef *ref)
+{
+    alGenBuffers(OPENAL_BUFS, ref->buffers);
+    alGenSources((uint32_t)1, &ref->source);
+    alSourcei(ref->source, AL_LOOPING, AL_FALSE);
+
+    const uint32_t frame_size = ref->frame_info.samples_per_frame * sample_size(ref->frame_info.stereo);
+    uint16_t zeros[frame_size];
+    memset(zeros, 0, frame_size);
+
+    for (int i = 0; i < OPENAL_BUFS; ++i) {
+        alBufferData(ref->buffers[i], sound_mode(ref->frame_info.stereo), zeros,
+                frame_size, ref->frame_info.sample_rate);
+    }
+
+    alSourceQueueBuffers(ref->source, OPENAL_BUFS, ref->buffers);
+    alSourcePlay(ref->source);
+
+    if (alcGetError(audio_state->device[output]) != AL_NO_ERROR) {
+        return de_FailedStart;
+    }
+
+    return de_None;
+}
+
+static void close_source(DeviceRef *ref)
+{
+    alDeleteSources(1, &ref->source);
+    alDeleteBuffers(OPENAL_BUFS, ref->buffers);
+}
+
+DeviceError set_device(DeviceType type, int32_t selection)
+{
+    if (audio_state->num_devices[type] <= selection || selection < 0) {
+        return de_InvalidSelection;
+    }
+
+    char **cur_name = &audio_state->current_device_name[type];
+    char *old_name = *cur_name;
+    const char *name = audio_state->device_names[type][selection];
+
+    const int oldlen = old_name ? strlen(old_name) : 0;
+    const int maxlen = strlen(name) > oldlen ? strlen(name) : oldlen;
+    *cur_name = malloc(maxlen + 1);
+
+    if (!*cur_name) {
+        return de_InternalError;
+    }
+
+    strcpy(*cur_name, name);
+
+    DeviceError err = de_None;
+
+    if (audio_state->device[type]) {
+        // close existing device and try to open new one, reopening existing sources
+        lock(type);
+
+        if (type == output) {
+            for (int i = 0; i < MAX_DEVICE_REFS; i++) {
+                DeviceRef *ref = &audio_state->device_refs[type][i];
+
+                if (ref->active) {
+                    close_source(ref);
+                }
+            }
+        }
+
+        close_al_device(type);
+
+        err = open_al_device(type, audio_state->capture_frame_info);
+
+        if (err != de_None) {
+            if (old_name) {
+                strcpy(*cur_name, old_name);
+                if (open_al_device(type, audio_state->capture_frame_info) == de_None) {
+                    err = de_None;
+                }
+            }
+        }
+
+        if (type == output) {
+            for (int i = 0; i < MAX_DEVICE_REFS; i++) {
+                DeviceRef *ref = &audio_state->device_refs[type][i];
+
+                if (ref->active) {
+                    if (err != de_None
+                            || open_source(ref) != de_None) {
+                        kill_ref(type, ref);
+                    }
+                }
+            }
+        }
+
+        unlock(type);
+    }
+
+    if (old_name) {
+        free(old_name);
+    }
+
+    return err;
+}
+
+static DeviceError get_device_ref(DeviceType type, uint32_t *device_idx,
+        DataHandleCallback cb, void *cb_data, bool enable_VAD,
+        uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
+{
+    if (channels != 1 && channels != 2) {
+        return de_UnsupportedMode;
+    }
+
+    const uint32_t samples_per_frame = (sample_rate * frame_duration / 1000);
+    FrameInfo frame_info = {samples_per_frame, sample_rate, channels == 2};
+
+    uint32_t i;
+    for (i = 0; i < MAX_DEVICE_REFS && audio_state->device_refs[type][i].active; ++i);
+
+    if (i == MAX_DEVICE_REFS) {
+        return de_AllDevicesBusy;
+    }
+
+    *device_idx = i;
+
+    lock(type);
+
+    if (!audio_state->device[type]) {
+        DeviceError err = open_al_device(type, frame_info);
+
+        if (err != de_None) {
+            unlock(type);
+            return err;
+        }
+    } else if (type == input) {
+        // Use previously set frame info on existing capture device
+        frame_info = audio_state->capture_frame_info;
+    }
+
+    DeviceRef *ref = &audio_state->device_refs[type][i];
+    ref->active = true;
+    ++audio_state->num_device_refs[type];
+
+    ref->muted = false;
+    ref->frame_info = frame_info;
+
+    if (type == input) {
+        ref->cb = cb;
+        ref->cb_data = cb_data;
+        ref->enable_VAD = enable_VAD;
+#ifdef AUDIO
+        ref->VAD_treshold = user_settings->VAD_treshold;
+#endif
+    } else {
+        if (open_source(ref) != de_None) {
+            kill_ref(type, ref);
+            unlock(type);
+            return de_FailedStart;
+        }
+    }
+
+    unlock(type);
+    return de_None;
+}
+
+DeviceError open_input_device(uint32_t *device_idx,
+        DataHandleCallback cb, void *cb_data, bool enable_VAD,
+        uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
+{
+    return get_device_ref(input, device_idx,
+            cb, cb_data, enable_VAD,
+            sample_rate, frame_duration, channels);
+}
+
+DeviceError open_output_device(uint32_t *device_idx,
+        uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
+{
+    return get_device_ref(output, device_idx,
+            0, 0, 0,
+            sample_rate, frame_duration, channels);
 }
 
 DeviceError close_device(DeviceType type, uint32_t device_idx)
 {
-    if (device_idx >= MAX_DEVICES) {
+    if (device_idx >= MAX_DEVICE_REFS) {
         return de_InvalidSelection;
     }
 
-    lock;
-    Device *device = running[type][device_idx];
-    DeviceError rc = de_None;
+    DeviceRef *ref = &audio_state->device_refs[type][device_idx];
 
-    if (!device) {
-        unlock;
+    if (!ref->active) {
         return de_DeviceNotActive;
     }
 
-    running[type][device_idx] = NULL;
+    lock(type);
 
-    if (!device->ref_count) {
-        if (type == input) {
-            if (!alcCaptureCloseDevice(device->dhndl)) {
-                rc = de_AlError;
-            }
-        } else {
-            if (alcGetCurrentContext() != device->ctx) {
-                alcMakeContextCurrent(device->ctx);
-            }
-
-            alDeleteSources(1, &device->source);
-            alDeleteBuffers(OPENAL_BUFS, device->buffers);
-
-            alcMakeContextCurrent(NULL);
-
-            if (device->ctx) {
-                alcDestroyContext(device->ctx);
-            }
-
-            if (!alcCloseDevice(device->dhndl)) {
-                rc = de_AlError;
-            }
-        }
-
-        free(device);
-    } else {
-        device->ref_count--;
+    if (type == output) {
+        close_source(ref);
     }
 
-    unlock;
-    return rc;
-}
+    kill_ref(type, ref);
 
-DeviceError register_device_callback(int32_t friend_number, uint32_t device_idx, DataHandleCallback callback,
-                                     void *data, bool enable_VAD)
-{
-    if (size[input] <= device_idx || !running[input][device_idx] || running[input][device_idx]->dhndl == NULL) {
-        return de_InvalidSelection;
+    DeviceError err = de_None;
+
+    if (!audio_state->num_device_refs[type]) {
+        err = close_al_device(type);
     }
 
-    lock;
-    running[input][device_idx]->cb = callback;
-    running[input][device_idx]->cb_data = data;
-    running[input][device_idx]->enable_VAD = enable_VAD;
-    running[input][device_idx]->friend_number = friend_number;
-    unlock;
-
-    return de_None;
+    unlock(type);
+    return err;
 }
 
 inline__ DeviceError write_out(uint32_t device_idx, const int16_t *data, uint32_t sample_count, uint8_t channels,
                                uint32_t sample_rate)
 {
-    if (device_idx >= MAX_DEVICES) {
+    if (device_idx >= MAX_DEVICE_REFS) {
         return de_InvalidSelection;
     }
 
-    Device *device = running[output][device_idx];
+    DeviceRef *ref = &audio_state->device_refs[output][device_idx];
 
-    if (!device || device->muted) {
+    if (!ref->active || ref->muted) {
         return de_DeviceNotActive;
     }
 
-    pthread_mutex_lock(device->mutex);
-
+    lock(output);
 
     ALuint bufid;
     ALint processed, queued;
-    alGetSourcei(device->source, AL_BUFFERS_PROCESSED, &processed);
-    alGetSourcei(device->source, AL_BUFFERS_QUEUED, &queued);
+    alGetSourcei(ref->source, AL_BUFFERS_PROCESSED, &processed);
+    alGetSourcei(ref->source, AL_BUFFERS_QUEUED, &queued);
 
     if (processed) {
         ALuint bufids[processed];
-        alSourceUnqueueBuffers(device->source, processed, bufids);
+        alSourceUnqueueBuffers(ref->source, processed, bufids);
         alDeleteBuffers(processed - 1, bufids + 1);
         bufid = bufids[0];
     } else if (queued < 16) {
         alGenBuffers(1, &bufid);
     } else {
-        pthread_mutex_unlock(device->mutex);
+        unlock(output);
         return de_Busy;
     }
 
 
-    alBufferData(bufid, channels == 1 ? AL_FORMAT_MONO16 : AL_FORMAT_STEREO16, data, sample_count * 2 * channels,
-                 sample_rate);
-    alSourceQueueBuffers(device->source, 1, &bufid);
+    const bool stereo = channels == 2;
+    alBufferData(bufid, sound_mode(stereo), data,
+            sample_count * sample_size(stereo),
+            sample_rate);
+    alSourceQueueBuffers(ref->source, 1, &bufid);
 
     ALint state;
-    alGetSourcei(device->source, AL_SOURCE_STATE, &state);
+    alGetSourcei(ref->source, AL_SOURCE_STATE, &state);
 
     if (state != AL_PLAYING) {
-        alSourcePlay(device->source);
+        alSourcePlay(ref->source);
     }
 
-
-    pthread_mutex_unlock(device->mutex);
+    unlock(output);
     return de_None;
 }
 
-void *thread_poll(void *arg)  // TODO: maybe use thread for every input source
+static void *poll_input(void *arg)
 {
-    /*
-     * NOTE: We only need to poll input devices for data.
-     */
-    (void)arg;
-    uint32_t i;
-    int32_t sample = 0;
-
-
     while (1) {
-        lock;
+        lock(input);
 
         if (!thread_running) {
-            unlock;
+            unlock(input);
             break;
         }
 
-        bool paused = thread_paused;
-        unlock;
-
-        /* Wait for unpause. */
-        if (paused) {
+        if (thread_paused) {
+            unlock(input);
             usleep(10000);
+            continue;
         }
 
-        else {
-            for (i = 0; i < size[input]; ++i) {
-                lock;
+        if (audio_state->device[input]) {
+            int32_t available_samples;
+            alcGetIntegerv(audio_state->device[input], ALC_CAPTURE_SAMPLES, sizeof(int32_t), &available_samples);
 
-                if (running[input][i] != NULL) {
-                    alcGetIntegerv(running[input][i]->dhndl, ALC_CAPTURE_SAMPLES, sizeof(int32_t), &sample);
+            const uint32_t f_size = audio_state->capture_frame_info.samples_per_frame;
 
-                    int f_size = (running[input][i]->sample_rate * running[input][i]->frame_duration / 1000);
+            if (available_samples >= f_size) {
+                int16_t frame[16000];
+                alcCaptureSamples(audio_state->device[input], frame, f_size);
 
-                    if (sample < f_size) {
-                        unlock;
-                        continue;
-                    }
+                for (int i = 0; i < MAX_DEVICE_REFS; i++) {
+                    DeviceRef *ref = &audio_state->device_refs[input][i];
 
-                    Device *device = running[input][i];
-
-                    int16_t frame[16000];
-                    alcCaptureSamples(device->dhndl, frame, f_size);
-
-                    if (device->muted) {
-                        unlock;
-                        continue;
-                    }
-
-                    if (device->cb) {
-                        device->cb(frame, f_size, device->cb_data);
+                    if (ref->active && !ref->muted && ref->cb) {
+                        ref->cb(frame, f_size, ref->cb_data);
                     }
                 }
-
-                unlock;
             }
-
-            usleep(5000);
         }
+
+        unlock(input);
+        usleep(5000);
     }
 
     pthread_exit(NULL);
@@ -523,11 +602,10 @@ void *thread_poll(void *arg)  // TODO: maybe use thread for every input source
 
 void print_devices(ToxWindow *self, DeviceType type)
 {
-    int i;
-
-    for (i = 0; i < size[type]; ++i) {
-        line_info_add(self, NULL, NULL, NULL, SYS_MSG, i == primary_device[type] ? 1 : 0, 0, "%d: %s", i,
-                      devices_names[type][i]);
+    for (int i = 0; i < audio_state->num_devices[type]; ++i) {
+        line_info_add(self, NULL, NULL, NULL, SYS_MSG,
+                audio_state->current_device_name[type] && strcmp(audio_state->current_device_name[type], audio_state->device_names[type][i]) == 0 ? 1 : 0,
+                0, "%d: %s", i, audio_state->device_names[type][i]);
     }
 
     return;
@@ -535,14 +613,5 @@ void print_devices(ToxWindow *self, DeviceType type)
 
 DeviceError selection_valid(DeviceType type, int32_t selection)
 {
-    return (size[type] <= selection || selection < 0) ? de_InvalidSelection : de_None;
-}
-
-void *get_device_callback_data(uint32_t device_idx)
-{
-    if (size[input] <= device_idx || !running[input][device_idx] || running[input][device_idx]->dhndl == NULL) {
-        return NULL;
-    }
-
-    return running[input][device_idx]->cb_data;
+    return (audio_state->num_devices[type] <= selection || selection < 0) ? de_InvalidSelection : de_None;
 }
