@@ -66,8 +66,6 @@ typedef struct {
     uint32_t num_peers;
 
     bool audio_enabled;
-
-    bool capturing_audio;
     uint32_t audio_in_idx;
     bool mute;
     AudioInputCallbackData audio_input_callback_data;

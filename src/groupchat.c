@@ -153,7 +153,7 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
             groupchats[i].num_peers = 0;
             groupchats[i].type = type;
             groupchats[i].start_time = get_unix_time();
-            groupchats[i].capturing_audio = false;
+            groupchats[i].audio_enabled = false;
 
             set_active_window_index(groupchats[i].chatwin);
             set_window_title(self, title, title_length);
@@ -190,7 +190,7 @@ void free_groupchat(ToxWindow *self, uint32_t groupnum)
         }
     }
 
-    if (chat->capturing_audio) {
+    if (chat->audio_enabled) {
         close_device(input, chat->audio_in_idx);
     }
 
@@ -198,7 +198,7 @@ void free_groupchat(ToxWindow *self, uint32_t groupnum)
     free(chat->peer_list);
     memset(chat, 0, sizeof(GroupChat));
 
-    if (groupchats[groupnum].capturing_audio) {
+    if (groupchats[groupnum].audio_enabled) {
         close_device(input, groupchats[groupnum].audio_in_idx);
     }
 
@@ -607,7 +607,7 @@ static void send_group_action(ToxWindow *self, ChatContext *ctx, Tox *m, char *a
 /* Offset for the peer number box at the top of the statusbar */
 static int sidebar_offset(uint32_t groupnum)
 {
-    return 2 + (groupchats[groupnum].type == TOX_CONFERENCE_TYPE_AV);
+    return 2 + groupchats[groupnum].audio_enabled;
 }
 
 
@@ -771,20 +771,20 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
 
         pthread_mutex_lock(&Winthread.lock);
         const uint32_t num_peers = groupchats[self->num].num_peers;
-        const bool av = groupchats[self->num].type == TOX_CONFERENCE_TYPE_AV;
-        const bool sending_audio = groupchats[self->num].capturing_audio && !groupchats[self->num].mute;
+        const bool audio = groupchats[self->num].audio_enabled;
+        const bool mic_on = audio && !groupchats[self->num].mute;
         const int header_lines = sidebar_offset(self->num);
         pthread_mutex_unlock(&Winthread.lock);
 
         int line = 0;
 
-        if (av) {
+        if (audio) {
             wmove(ctx->sidebar, line, 1);
             wattron(ctx->sidebar, A_BOLD);
             wprintw(ctx->sidebar, "Mic: ");
-            const int color = sending_audio ? GREEN : RED;
+            const int color = mic_on ? GREEN : RED;
             wattron(ctx->sidebar, COLOR_PAIR(color));
-            wprintw(ctx->sidebar, sending_audio ? "ON" : "OFF");
+            wprintw(ctx->sidebar, mic_on ? "ON" : "OFF");
             wattroff(ctx->sidebar, COLOR_PAIR(color));
             wattroff(ctx->sidebar, A_BOLD);
             ++line;
@@ -814,13 +814,13 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
 
             /* truncate nick to fit in side panel without modifying list */
             char tmpnck[TOX_MAX_NAME_LENGTH];
-            int maxlen = SIDEBAR_WIDTH - 2 - av;
+            int maxlen = SIDEBAR_WIDTH - 2 - audio;
 
-            if (av) {
+            if (audio) {
                 pthread_mutex_lock(&Winthread.lock);
                 const GroupPeer *peer = &groupchats[self->num].peer_list[peernum];
                 const bool audio_active = is_self
-                    ? sending_audio
+                    ? mic_on
                     : peer->active && peer->sending_audio && !timed_out(peer->last_audio_time, 2);
                 const bool mute = !is_self && peer->mute;
                 pthread_mutex_unlock(&Winthread.lock);
@@ -1009,7 +1009,7 @@ bool init_group_audio_input(Tox *tox, uint32_t groupnumber)
                 GROUPAV_SAMPLE_RATE, GROUPAV_FRAME_DURATION, GROUPAV_AUDIO_CHANNELS)
             == de_None);
 
-    chat->capturing_audio = success;
+    chat->audio_enabled = success;
     chat->mute = false;
 
     return success;
@@ -1017,8 +1017,13 @@ bool init_group_audio_input(Tox *tox, uint32_t groupnumber)
 
 bool enable_group_audio(Tox *tox, uint32_t groupnumber)
 {
-    return (toxav_groupchat_enable_av(tox, groupnumber, audio_group_callback, NULL) == 0
-                && init_group_audio_input(tox, groupnumber));
+    if (!toxav_groupchat_av_enabled(tox, groupnumber)) {
+        if (toxav_groupchat_enable_av(tox, groupnumber, audio_group_callback, NULL) != 0) {
+            return false;
+        }
+    }
+
+    return init_group_audio_input(tox, groupnumber);
 }
 
 bool disable_group_audio(Tox *tox, uint32_t groupnumber)
@@ -1029,9 +1034,9 @@ bool disable_group_audio(Tox *tox, uint32_t groupnumber)
         return false;
     }
 
-    if (chat->capturing_audio) {
+    if (chat->audio_enabled) {
         close_device(input, chat->audio_in_idx);
-        chat->capturing_audio = false;
+        chat->audio_enabled = false;
     }
 
     return (toxav_groupchat_disable_av(tox, groupnumber) == 0);
@@ -1041,7 +1046,7 @@ bool group_mute_self(uint32_t groupnumber)
 {
     GroupChat *chat = &groupchats[groupnumber];
 
-    if (!chat->active || !chat->capturing_audio) {
+    if (!chat->active || !chat->audio_enabled) {
         return false;
     }
 
@@ -1055,7 +1060,7 @@ bool group_mute_peer(uint32_t groupnumber, const char *prefix)
 {
     GroupChat *chat = &groupchats[groupnumber];
 
-    if (!chat->active) {
+    if (!chat->active || !chat->audio_enabled) {
         return false;
     }
 
