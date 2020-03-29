@@ -40,6 +40,7 @@ typedef struct GroupPeer {
     size_t     name_length;
 
     bool       sending_audio;
+    bool       mute;
     uint32_t   audio_out_idx;
     time_t     last_audio_time;
 } GroupPeer;
@@ -48,6 +49,8 @@ typedef struct AudioInputCallbackData {
     Tox *tox;
     uint32_t groupnumber;
 } AudioInputCallbackData;
+
+typedef struct NameListEntry NameListEntry;
 
 typedef struct {
     int chatwin;
@@ -59,7 +62,7 @@ typedef struct {
     GroupPeer *peer_list;
     uint32_t max_idx;
 
-    char *name_list;
+    NameListEntry *name_list;
     uint32_t num_peers;
 
     bool audio_enabled;
