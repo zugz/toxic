@@ -114,3 +114,18 @@ void cmd_disable_audio(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (
         line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Failed to disable audio");
     }
 }
+
+void cmd_group_mute(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*argv)[MAX_STR_SIZE])
+{
+    UNUSED_VAR(window);
+
+    if (argc < 1) {
+        if (!group_mute_self(self->num)) {
+            line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "No audio input to mute");
+        }
+    } else {
+        if (!group_mute_peer(self->num, argv[1])) {
+            line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "No such audio peer");
+        }
+    }
+}

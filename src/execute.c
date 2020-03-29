@@ -103,17 +103,17 @@ static struct cmd_func group_commands[] = {
     { "/noaudio",   cmd_disable_audio },
 
 #ifdef AUDIO
-    { "/mute",      cmd_mute        },
-    { "/sense",     cmd_sense       },
+    { "/mute",      cmd_group_mute },
+    { "/sense",     cmd_sense      },
 #endif /* AUDIO */
     { NULL,         NULL            },
 };
 
 
 #ifdef PYTHON
-#define SPECIAL_COMMANDS 6
+#define SPECIAL_COMMANDS 7
 #else
-#define SPECIAL_COMMANDS 5
+#define SPECIAL_COMMANDS 6
 #endif /* PYTHON */
 
 /* Special commands are commands that only take one argument even if it contains spaces */
@@ -126,6 +126,7 @@ static const char special_commands[SPECIAL_COMMANDS][MAX_CMDNAME_SIZE] = {
 #endif /* PYTHON */
     "/sendfile",
     "/title",
+    "/mute",
 };
 
 /* Returns true if input command is in the special_commands array. */

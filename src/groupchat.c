@@ -961,3 +961,39 @@ bool disable_group_audio(Tox *tox, uint32_t groupnumber)
 
     return (toxav_groupchat_disable_av(tox, groupnumber) == 0);
 }
+
+bool group_mute_self(uint32_t groupnumber)
+{
+    GroupChat *chat = &groupchats[groupnumber];
+
+    if (!chat->active || !chat->capturing_audio) {
+        return false;
+    }
+
+    device_mute(input, chat->audio_in_idx);
+
+    return true;
+}
+
+bool group_mute_peer(uint32_t groupnumber, const char *prefix)
+{
+    GroupChat *chat = &groupchats[groupnumber];
+
+    if (!chat->active) {
+        return false;
+    }
+
+    const int len = strlen(prefix);
+
+    for (uint32_t i = 0; i < chat->max_idx; ++i) {
+        GroupPeer *peer = &chat->peer_list[i];
+
+        if (peer->active && peer->sending_audio
+                && peer->name_length >= len && strncmp(prefix, peer->name, len) == 0) {
+            device_mute(output, peer->audio_out_idx);
+            return true;
+        }
+    }
+
+    return false;
+}
