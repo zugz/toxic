@@ -154,6 +154,7 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
             groupchats[i].type = type;
             groupchats[i].start_time = get_unix_time();
             groupchats[i].audio_enabled = false;
+            groupchats[i].last_sent_audio = get_unix_time();
 
             set_active_window_index(groupchats[i].chatwin);
             set_window_title(self, title, title_length);
@@ -772,7 +773,7 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
         pthread_mutex_lock(&Winthread.lock);
         const uint32_t num_peers = groupchats[self->num].num_peers;
         const bool audio = groupchats[self->num].audio_enabled;
-        const bool mic_on = audio && !groupchats[self->num].mute;
+        const bool self_mute = groupchats[self->num].mute;
         const int header_lines = sidebar_offset(self->num);
         pthread_mutex_unlock(&Winthread.lock);
 
@@ -782,6 +783,7 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
             wmove(ctx->sidebar, line, 1);
             wattron(ctx->sidebar, A_BOLD);
             wprintw(ctx->sidebar, "Mic: ");
+            const bool mic_on = audio && !self_mute;
             const int color = mic_on ? GREEN : RED;
             wattron(ctx->sidebar, COLOR_PAIR(color));
             wprintw(ctx->sidebar, mic_on ? "ON" : "OFF");
@@ -820,9 +822,9 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
                 pthread_mutex_lock(&Winthread.lock);
                 const GroupPeer *peer = &groupchats[self->num].peer_list[peernum];
                 const bool audio_active = is_self
-                    ? mic_on
+                    ? !timed_out(groupchats[self->num].last_sent_audio, 2)
                     : peer->active && peer->sending_audio && !timed_out(peer->last_audio_time, 2);
-                const bool mute = !is_self && peer->mute;
+                const bool mute = is_self ? self_mute : peer->mute;
                 pthread_mutex_unlock(&Winthread.lock);
 
                 const int aud_attr = A_BOLD | COLOR_PAIR(audio_active && !mute ? GREEN : RED);
@@ -986,6 +988,8 @@ static void group_read_device_callback(const int16_t *captured, uint32_t size, v
     UNUSED_VAR(size);
 
     AudioInputCallbackData *audio_input_callback_data = (AudioInputCallbackData *)data;
+
+    groupchats[groupnumber].last_sent_audio = get_unix_time();
 
     toxav_group_send_audio(audio_input_callback_data->tox,
             audio_input_callback_data->groupnumber,
