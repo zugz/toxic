@@ -71,6 +71,8 @@ static int max_groupchat_index = 0;
 extern struct user_settings *user_settings;
 extern struct Winthread Winthread;
 
+extern pthread_mutex_t tox_lock;
+
 #ifdef PYTHON
 #define AC_NUM_GROUP_COMMANDS_PYTHON 1
 #else
@@ -989,12 +991,16 @@ static void group_read_device_callback(const int16_t *captured, uint32_t size, v
 
     AudioInputCallbackData *audio_input_callback_data = (AudioInputCallbackData *)data;
 
-    groupchats[groupnumber].last_sent_audio = get_unix_time();
+    pthread_mutex_lock(&Winthread.lock);
+    groupchats[audio_input_callback_data->groupnumber].last_sent_audio = get_unix_time();
+    pthread_mutex_unlock(&Winthread.lock);
 
+    pthread_mutex_lock(&tox_lock);
     toxav_group_send_audio(audio_input_callback_data->tox,
             audio_input_callback_data->groupnumber,
             captured, GROUPAV_SAMPLES_PER_FRAME,
             GROUPAV_AUDIO_CHANNELS, GROUPAV_SAMPLE_RATE);
+    pthread_mutex_unlock(&tox_lock);
 }
 
 bool init_group_audio_input(Tox *tox, uint32_t groupnumber)
