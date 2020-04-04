@@ -362,6 +362,7 @@ void cmd_groupchat(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*arg
     }
 
     uint32_t groupnum;
+
     if (type == TOX_CONFERENCE_TYPE_TEXT) {
         Tox_Err_Conference_New err;
 

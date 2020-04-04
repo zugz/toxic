@@ -133,6 +133,7 @@ static void catch_SIGSEGV(int sig)
     if (!freopen("/dev/tty", "w", stderr)) {    // make sure stderr is enabled since we may have disabled it
         fprintf(stderr, "Warning: Failed to enable stderr\n");
     }
+
     endwin();
     fprintf(stderr, "Caught SIGSEGV: Aborting toxic session.\n");
     exit(EXIT_FAILURE);
@@ -381,7 +382,8 @@ static void load_groups(Tox *m)
         }
 
         if (type == TOX_CONFERENCE_TYPE_AV) {
-            line_info_add(get_window_ptr(win_idx), NULL, NULL, NULL, SYS_MSG, 0, 0, "Use \"/audio on\" to enable audio in this group.");
+            line_info_add(get_window_ptr(win_idx), NULL, NULL, NULL, SYS_MSG, 0, 0,
+                          "Use \"/audio on\" to enable audio in this group.");
         }
     }
 }

@@ -100,7 +100,6 @@ static struct cmd_func chat_commands[] = {
 static struct cmd_func group_commands[] = {
     { "/title",     cmd_set_title     },
     { "/audio",     cmd_enable_audio  },
-    { "/noaudio",   cmd_disable_audio },
 
 #ifdef AUDIO
     { "/mute",      cmd_group_mute },

@@ -185,15 +185,15 @@ void read_device_callback(const int16_t *captured, uint32_t size, void *data)
                            ((int64_t) CallControl.audio_frame_duration) / 1000;
 
     if (sample_count <= 0) {
-       return;
+        return;
     }
 
     pthread_mutex_lock(&tox_lock);
 
     toxav_audio_send_frame(CallControl.av, friend_number,
-            captured, sample_count,
-            CallControl.audio_channels,
-            CallControl.audio_sample_rate, &error);
+                           captured, sample_count,
+                           CallControl.audio_channels,
+                           CallControl.audio_sample_rate, &error);
 
     pthread_mutex_unlock(&tox_lock);
 }
@@ -218,7 +218,7 @@ int start_transmission(ToxWindow *self, Call *call)
     }
 
     DeviceError error = open_input_device(&call->in_idx, read_device_callback, &self->num, true,
-                                            CallControl.audio_sample_rate, CallControl.audio_frame_duration, CallControl.audio_channels);
+                                          CallControl.audio_sample_rate, CallControl.audio_frame_duration, CallControl.audio_channels);
     /* Set VAD as true for all; TODO: Make it more dynamic */
 
     if (error != de_None) {
@@ -232,7 +232,7 @@ int start_transmission(ToxWindow *self, Call *call)
     }
 
     if (open_output_device(&call->out_idx,
-                            CallControl.audio_sample_rate, CallControl.audio_frame_duration, CallControl.audio_channels) != de_None) {
+                           CallControl.audio_sample_rate, CallControl.audio_frame_duration, CallControl.audio_channels) != de_None) {
         line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Failed to open output device!");
         call->has_output = 0;
     }

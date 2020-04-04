@@ -86,6 +86,7 @@ void cmd_enable_audio(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*
     UNUSED_VAR(window);
 
     bool enable;
+
     if (argc == 1 && !strcasecmp(argv[1], "on")) {
         enable = true;
     } else if (argc == 1 && !strcasecmp(argv[1], "off")) {
@@ -99,19 +100,6 @@ void cmd_enable_audio(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*
         line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, enable ? "Enabled group audio" : "Disabled group audio");
     } else {
         line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, enable ? "Failed to enable audio" : "Failed to disable audio");
-    }
-}
-
-void cmd_disable_audio(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*argv)[MAX_STR_SIZE])
-{
-    UNUSED_VAR(window);
-    UNUSED_VAR(argc);
-    UNUSED_VAR(argv);
-
-    if (disable_group_audio(m, self->num)) {
-        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Disabled group audio");
-    } else {
-        line_info_add(self, NULL, NULL, NULL, SYS_MSG, 0, 0, "Failed to disable audio");
     }
 }
 

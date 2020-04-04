@@ -185,6 +185,7 @@ void get_al_device_names()
 
     for (DeviceType type = input; type <= output; type++) {
         audio_state->num_al_devices[type] = 0;
+
         if (type == input) {
             stringed_device_list = alcGetString(NULL, ALC_CAPTURE_DEVICE_SPECIFIER);
         } else {
@@ -199,7 +200,8 @@ void get_al_device_names()
             audio_state->default_al_device_name[type] = alcGetString(NULL,
                     type == input ? ALC_CAPTURE_DEFAULT_DEVICE_SPECIFIER : ALC_DEFAULT_DEVICE_SPECIFIER);
 
-            for (; *stringed_device_list && audio_state->num_al_devices[type] < MAX_OPENAL_DEVICES; ++audio_state->num_al_devices[type]) {
+            for (; *stringed_device_list
+                    && audio_state->num_al_devices[type] < MAX_OPENAL_DEVICES; ++audio_state->num_al_devices[type]) {
                 audio_state->al_device_names[type][audio_state->num_al_devices[type]] = stringed_device_list;
                 stringed_device_list += strlen(stringed_device_list) + 1;
             }
@@ -304,9 +306,9 @@ static DeviceError close_al_device(DeviceType type)
 static DeviceError open_al_device(DeviceType type, FrameInfo frame_info)
 {
     audio_state->al_device[type] = type == input
-        ? alcCaptureOpenDevice(audio_state->current_al_device_name[type],
-                frame_info.sample_rate, sound_mode(frame_info.stereo), frame_info.samples_per_frame * 2)
-        : alcOpenDevice(audio_state->current_al_device_name[type]);
+                                   ? alcCaptureOpenDevice(audio_state->current_al_device_name[type],
+                                           frame_info.sample_rate, sound_mode(frame_info.stereo), frame_info.samples_per_frame * 2)
+                                   : alcOpenDevice(audio_state->current_al_device_name[type]);
 
     if (audio_state->al_device[type] == NULL) {
         return de_FailedStart;
@@ -364,7 +366,7 @@ static DeviceError open_source(Device *device)
 
     for (int i = 0; i < OPENAL_BUFS; ++i) {
         alBufferData(device->buffers[i], sound_mode(device->frame_info.stereo), zeros,
-                frame_size, device->frame_info.sample_rate);
+                     frame_size, device->frame_info.sample_rate);
     }
 
     alSourceQueueBuffers(device->source, OPENAL_BUFS, device->buffers);
@@ -440,8 +442,8 @@ DeviceError set_al_device(DeviceType type, int32_t selection)
 }
 
 static DeviceError open_device(DeviceType type, uint32_t *device_idx,
-        DataHandleCallback cb, void *cb_data, bool enable_VAD,
-        uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
+                               DataHandleCallback cb, void *cb_data, bool enable_VAD,
+                               uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
 {
     if (channels != 1 && channels != 2) {
         return de_UnsupportedMode;
@@ -451,6 +453,7 @@ static DeviceError open_device(DeviceType type, uint32_t *device_idx,
     FrameInfo frame_info = {samples_per_frame, sample_rate, channels == 2};
 
     uint32_t i;
+
     for (i = 0; i < MAX_DEVICES && audio_state->devices[type][i].active; ++i);
 
     if (i == MAX_DEVICES) {
@@ -501,20 +504,20 @@ static DeviceError open_device(DeviceType type, uint32_t *device_idx,
 }
 
 DeviceError open_input_device(uint32_t *device_idx,
-        DataHandleCallback cb, void *cb_data, bool enable_VAD,
-        uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
+                              DataHandleCallback cb, void *cb_data, bool enable_VAD,
+                              uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
 {
     return open_device(input, device_idx,
-            cb, cb_data, enable_VAD,
-            sample_rate, frame_duration, channels);
+                       cb, cb_data, enable_VAD,
+                       sample_rate, frame_duration, channels);
 }
 
 DeviceError open_output_device(uint32_t *device_idx,
-        uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
+                               uint32_t sample_rate, uint32_t frame_duration, uint8_t channels)
 {
     return open_device(output, device_idx,
-            0, 0, 0,
-            sample_rate, frame_duration, channels);
+                       0, 0, 0,
+                       sample_rate, frame_duration, channels);
 }
 
 DeviceError close_device(DeviceType type, uint32_t device_idx)
@@ -589,8 +592,8 @@ inline__ DeviceError write_out(uint32_t device_idx, const int16_t *data, uint32_
 
     const bool stereo = channels == 2;
     alBufferData(bufid, sound_mode(stereo), data,
-            sample_count * sample_size(stereo),
-            sample_rate);
+                 sample_count * sample_size(stereo),
+                 sample_rate);
     alSourceQueueBuffers(device->source, 1, &bufid);
 
     ALint state;
@@ -657,8 +660,9 @@ void print_al_devices(ToxWindow *self, DeviceType type)
 {
     for (int i = 0; i < audio_state->num_al_devices[type]; ++i) {
         line_info_add(self, NULL, NULL, NULL, SYS_MSG,
-                audio_state->current_al_device_name[type] && strcmp(audio_state->current_al_device_name[type], audio_state->al_device_names[type][i]) == 0 ? 1 : 0,
-                0, "%d: %s", i, audio_state->al_device_names[type][i]);
+                      audio_state->current_al_device_name[type]
+                      && strcmp(audio_state->current_al_device_name[type], audio_state->al_device_names[type][i]) == 0 ? 1 : 0,
+                      0, "%d: %s", i, audio_state->al_device_names[type][i]);
     }
 
     return;

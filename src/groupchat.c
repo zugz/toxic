@@ -156,7 +156,7 @@ int init_groupchat_win(Tox *m, uint32_t groupnum, uint8_t type, const char *titl
             groupchats[i].type = type;
             groupchats[i].start_time = get_unix_time();
             groupchats[i].audio_enabled = false;
-            groupchats[i].last_sent_audio = get_unix_time();
+            groupchats[i].last_sent_audio = 0;
 
             set_active_window_index(groupchats[i].chatwin);
             set_window_title(self, title, title_length);
@@ -200,10 +200,6 @@ void free_groupchat(ToxWindow *self, uint32_t groupnum)
     free(chat->name_list);
     free(chat->peer_list);
     memset(chat, 0, sizeof(GroupChat));
-
-    if (groupchats[groupnum].audio_enabled) {
-        close_device(input, groupchats[groupnum].audio_in_idx);
-    }
 
     int i;
 
@@ -344,8 +340,8 @@ struct NameListEntry {
 static int compare_name_list_entries(const void *a, const void *b)
 {
     return qsort_strcasecmp_hlpr(
-            ((NameListEntry *)a)->name,
-            ((NameListEntry *)b)->name);
+               ((NameListEntry *)a)->name,
+               ((NameListEntry *)b)->name);
 }
 
 static void group_update_name_list(uint32_t groupnum)
@@ -420,6 +416,7 @@ static void set_peer_audio_position(Tox *m, uint32_t groupnum, uint32_t peernum)
     // ordered left to right by order in peerlist excluding self.
     uint32_t num_posns = chat->num_peers;
     uint32_t peer_posn = peernum;
+
     for (uint32_t i = 0; i < chat->num_peers; ++i) {
         if (tox_conference_peer_number_is_ours(m, groupnum, peernum, NULL)) {
             if (i == peernum) {
@@ -434,7 +431,7 @@ static void set_peer_audio_position(Tox *m, uint32_t groupnum, uint32_t peernum)
         }
     }
 
-    const float angle = asinf(peer_posn - (float)(num_posns-1)/2);
+    const float angle = asinf(peer_posn - (float)(num_posns - 1) / 2);
     set_source_position(peer->audio_out_idx, sinf(angle), cosf(angle), 0);
 }
 
@@ -484,6 +481,7 @@ static void update_peer_list(Tox *m, uint32_t groupnum, uint32_t num_peers, uint
         }
 
         uint32_t j;
+
         if (find_peer_by_pubkey(old_peer_list, old_num_peers, peer->pubkey, &j)) {
             GroupPeer *old_peer = &old_peer_list[j];
             memcpy(peer, old_peer, sizeof(GroupPeer));
@@ -824,8 +822,8 @@ static void groupchat_onDraw(ToxWindow *self, Tox *m)
                 pthread_mutex_lock(&Winthread.lock);
                 const GroupPeer *peer = &groupchats[self->num].peer_list[peernum];
                 const bool audio_active = is_self
-                    ? !timed_out(groupchats[self->num].last_sent_audio, 2)
-                    : peer->active && peer->sending_audio && !timed_out(peer->last_audio_time, 2);
+                                          ? !timed_out(groupchats[self->num].last_sent_audio, 2)
+                                          : peer->active && peer->sending_audio && !timed_out(peer->last_audio_time, 2);
                 const bool mute = is_self ? self_mute : peer->mute;
                 pthread_mutex_unlock(&Winthread.lock);
 
@@ -944,7 +942,13 @@ static ToxWindow *new_group_chat(uint32_t groupnum)
     return ret;
 }
 
-void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber, const int16_t *pcm, unsigned int samples, uint8_t channels, uint32_t sample_rate, void *userdata)
+#define GROUPAV_SAMPLE_RATE 48000
+#define GROUPAV_FRAME_DURATION 20
+#define GROUPAV_AUDIO_CHANNELS 1
+#define GROUPAV_SAMPLES_PER_FRAME (GROUPAV_SAMPLE_RATE * GROUPAV_FRAME_DURATION / 1000)
+
+void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber, const int16_t *pcm,
+                          unsigned int samples, uint8_t channels, uint32_t sample_rate, void *userdata)
 {
     GroupChat *chat = &groupchats[groupnumber];
 
@@ -961,7 +965,7 @@ void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber, 
 
         if (!peer->sending_audio) {
             if (open_output_device(&peer->audio_out_idx,
-                                    sample_rate, 20, channels) != de_None) {
+                                   sample_rate, GROUPAV_FRAME_DURATION, channels) != de_None) {
                 // TODO: error message?
                 return;
             }
@@ -980,11 +984,6 @@ void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber, 
     }
 }
 
-#define GROUPAV_SAMPLE_RATE 48000
-#define GROUPAV_FRAME_DURATION 20
-#define GROUPAV_AUDIO_CHANNELS 1
-#define GROUPAV_SAMPLES_PER_FRAME (GROUPAV_SAMPLE_RATE * GROUPAV_FRAME_DURATION / 1000)
-
 static void group_read_device_callback(const int16_t *captured, uint32_t size, void *data)
 {
     UNUSED_VAR(size);
@@ -997,9 +996,9 @@ static void group_read_device_callback(const int16_t *captured, uint32_t size, v
 
     pthread_mutex_lock(&tox_lock);
     toxav_group_send_audio(audio_input_callback_data->tox,
-            audio_input_callback_data->groupnumber,
-            captured, GROUPAV_SAMPLES_PER_FRAME,
-            GROUPAV_AUDIO_CHANNELS, GROUPAV_SAMPLE_RATE);
+                           audio_input_callback_data->groupnumber,
+                           captured, GROUPAV_SAMPLES_PER_FRAME,
+                           GROUPAV_AUDIO_CHANNELS, GROUPAV_SAMPLE_RATE);
     pthread_mutex_unlock(&tox_lock);
 }
 
@@ -1010,14 +1009,14 @@ bool init_group_audio_input(Tox *tox, uint32_t groupnumber)
     if (!chat->active) {
         return false;
     }
-    
+
     const AudioInputCallbackData audio_input_callback_data = { tox, groupnumber };
     chat->audio_input_callback_data = audio_input_callback_data;
 
     bool success = (open_input_device(&chat->audio_in_idx,
-                group_read_device_callback, &chat->audio_input_callback_data, true, 
-                GROUPAV_SAMPLE_RATE, GROUPAV_FRAME_DURATION, GROUPAV_AUDIO_CHANNELS)
-            == de_None);
+                                      group_read_device_callback, &chat->audio_input_callback_data, true,
+                                      GROUPAV_SAMPLE_RATE, GROUPAV_FRAME_DURATION, GROUPAV_AUDIO_CHANNELS)
+                    == de_None);
 
     chat->audio_enabled = success;
     chat->mute = false;

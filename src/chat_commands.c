@@ -127,6 +127,7 @@ void cmd_join_group(WINDOW *window, ToxWindow *self, Tox *m, int argc, char (*ar
     }
 
     uint32_t groupnum ;
+
     if (type == TOX_CONFERENCE_TYPE_TEXT) {
         Tox_Err_Conference_Join err;
         groupnum = tox_conference_join(m, self->num, (const uint8_t *) groupkey, length, &err);

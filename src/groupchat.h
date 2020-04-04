@@ -84,8 +84,8 @@ bool init_group_audio_input(Tox *tox, uint32_t groupnumber);
 bool enable_group_audio(Tox *tox, uint32_t groupnumber);
 bool disable_group_audio(Tox *tox, uint32_t groupnumber);
 void audio_group_callback(void *tox, uint32_t groupnumber, uint32_t peernumber,
-        const int16_t *pcm, unsigned int samples, uint8_t channels, uint32_t
-        sample_rate, void *userdata);
+                          const int16_t *pcm, unsigned int samples, uint8_t channels, uint32_t
+                          sample_rate, void *userdata);
 
 bool group_mute_self(uint32_t groupnumber);
 bool group_mute_peer(uint32_t groupnumber, const char *prefix);
