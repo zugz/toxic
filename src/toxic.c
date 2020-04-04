@@ -103,6 +103,7 @@ struct av_thread av_thread;
 struct arg_opts arg_opts;
 struct user_settings *user_settings = NULL;
 
+pthread_mutex_t tox_lock;
 
 static struct user_password {
     bool data_is_encrypted;
@@ -857,8 +858,12 @@ static void do_toxic(Tox *m)
         return;
     }
 
+    pthread_mutex_lock(&tox_lock);
+
     tox_iterate(m, NULL);
     do_tox_connection(m);
+
+    pthread_mutex_unlock(&tox_lock);
     pthread_mutex_unlock(&Winthread.lock);
 }
 
@@ -1279,6 +1284,10 @@ int main(int argc, char **argv)
 
     if (user_settings == NULL) {
         exit_toxic_err("failed in main", FATALERR_MEMORY);
+    }
+
+    if (pthread_mutex_init(&tox_lock, NULL) != 0) {
+        exit_toxic_err("failed in main", FATALERR_MUTEX_INIT);
     }
 
     const char *p = arg_opts.config_path[0] ? arg_opts.config_path : NULL;
